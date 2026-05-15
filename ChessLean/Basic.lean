@@ -1,3 +1,7 @@
+/-
+Authors: Malhar A. Patel
+-/
+
 inductive Color where
   | white
   | black
