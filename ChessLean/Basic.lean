@@ -56,10 +56,10 @@ inductive Castle where
   | queenside
 
 structure CastlingRights where
-  whiteKingside  : Bool
-  whiteQueenside : Bool
-  blackKingside  : Bool
-  blackQueenside : Bool
+  whiteKingside  : Bool := true
+  whiteQueenside : Bool := true
+  blackKingside  : Bool := true
+  blackQueenside : Bool := true
 
 inductive Move where
   | normal    (m : NormalMove)
@@ -67,16 +67,27 @@ inductive Move where
   | promotion (m : PawnPromotionMove)
   | enPassant (m : PawnEnPassantMove)
 
+inductive Result where
+  | ongoing
+  | win (col : Color)
+  | draw
+
+structure Captures where
+  white : List Piece
+  black : List Piece
+
 structure GameState where
   board       : Board
-  turn        : Color
-  castling    : CastlingRights
-  enPassantSq : Option Square
+  turn        : Color := .white
+  castling    : CastlingRights := {}
+  enPassantSq : Option Square := none
+  captures    : Captures := ⟨ [], [] ⟩
+  halfMoves   : Nat := 0
   numMove     : Nat := 0
-  halfMoves   : Nat
+  result      : Result := .ongoing
   valid       : Bool := true
   messages    : List String := []
-  history     : List NormalMove := []
+  history     : List Move := []
 
 open GameState Color NormalMove Move PieceType Castle
 
@@ -145,7 +156,7 @@ def GameState.queenMoves (state : GameState) (sq : Square) : List Move :=
 
 /-- Return all valid pawn moves for pawn at square `sq` -/
 def GameState.pawnMoves (state : GameState) (sq : Square) : List Move :=
-  singlePushMoves ++ doublePushMoves ++ captureMoves    
+  singlePushMoves ++ doublePushMoves ++ captureMoves
   where
     dir := match state.turn with | .white => 1 | .black => -1
     singlePushMoves :=
@@ -246,7 +257,7 @@ def GameState.generateAllPseudoLegalMoves (state : GameState) : List Move :=
     | none   => []
 
 /-- Update castling rights based on piece `p` moving from `fromSq` to `toSq` -/
-def CastlingRights.updateCastlingRights (rights : CastlingRights) (fromSq toSq : Square) (p : Piece)
+def CastlingRights.update (rights : CastlingRights) (p : Piece) (fromSq toSq : Square)
     : CastlingRights :=
   match p.type, p.color with
   | .king, .white => { rights with whiteKingside := false, whiteQueenside := false}
@@ -259,3 +270,91 @@ def CastlingRights.updateCastlingRights (rights : CastlingRights) (fromSq toSq :
     else if sq.rank == 7 ∧ sq.file == 7 then { cr with blackKingside := false }
     else if sq.rank == 7 ∧ sq.file == 0 then { cr with blackQueenside := false }
     else    cr
+
+/-- Direction of pawn movement for color -/
+def Color.getDir (col : Color) : Int :=
+  match col with
+  | white => 1
+  | black => -1
+
+/-- Move `piece` from `fromSq` to `toSq` on `board` -/
+def Board.movePiece (board : Board) (piece : Piece) (fromSq toSq : Square)
+    : Board :=
+  board.update fromSq none |>.update toSq piece
+
+/-- Apply a pseudo-legal move on a GameState -/
+def GameState.applyPseudoLegalMove (state : GameState) (move : Move)
+    : GameState :=
+  match move with
+  | normal m =>
+    match state.board m.fromSq with
+    | none => state
+    | some piece =>
+      { state with
+        board := state.board.movePiece piece m.fromSq m.toSq
+        turn := state.turn.opposite
+        castling := state.castling.update piece m.fromSq m.toSq
+        enPassantSq := getEnPassantState m piece
+        captures := addCapture state m.toSq
+        halfMoves := updateHalfMoves state piece m.toSq
+        numMove := state.numMove + 1 }
+  | castle m =>
+    let rank : Rank := match state.turn with | white => 0 | black => 7
+    let new_board := match m with
+    | kingside => state.board.movePiece ⟨state.turn, king⟩ ⟨4,rank⟩ ⟨6,rank⟩
+      |>.movePiece ⟨state.turn, rook⟩ ⟨7,rank⟩ ⟨5,rank⟩
+    | queenside => state.board.movePiece ⟨state.turn, king⟩ ⟨4,rank⟩ ⟨2,rank⟩
+      |>.movePiece ⟨state.turn, rook⟩ ⟨0,rank⟩ ⟨3,rank⟩
+    { state with
+      board := new_board
+      turn := state.turn.opposite
+      castling := state.castling.update ⟨state.turn, king⟩ ⟨4,rank⟩ ⟨6,rank⟩
+      enPassantSq := none
+      halfMoves := state.halfMoves + 1
+      numMove := state.numMove + 1 }
+  | promotion m =>
+    let piece : Piece := ⟨state.turn, pawn⟩
+    { state with
+        board := state.board.movePiece piece m.fromSq m.toSq
+          |>.update m.toSq (some ⟨state.turn, m.promotion⟩)
+        turn := state.turn.opposite
+        castling := state.castling.update piece m.fromSq m.toSq
+        enPassantSq := none
+        captures := addCapture state m.toSq
+        halfMoves := 0
+        numMove := state.numMove + 1 }
+  | enPassant m =>
+    let piece : Piece := ⟨state.turn, pawn⟩
+    let captureSq : Square := match state.turn with
+      | white => ⟨m.enPassantSq.file, 4⟩
+      | black => ⟨m.enPassantSq.file, 3⟩
+    { state with
+        board := state.board.movePiece piece m.fromSq m.enPassantSq
+          |>.update captureSq none
+        turn := state.turn.opposite
+        enPassantSq := none
+        captures := addCapture state captureSq
+        halfMoves := 0
+        numMove := state.numMove + 1 }
+  where
+    getEnPassantState (m : NormalMove) (piece : Piece) :=
+      match piece.type with
+      | pawn =>
+        let rankDiff := (m.toSq.rank : Int) - (m.fromSq.rank : Int)
+        if rankDiff.natAbs == 2 then
+          m.fromSq.offsetSquare 0 piece.color.getDir
+        else none
+      | _ => none
+    addCapture (state : GameState) (toSq : Square) :=
+      match state.board toSq with
+      | none   => state.captures
+      | some captured_piece =>
+        match state.turn with
+        | white => { state.captures with black := captured_piece :: state.captures.black }
+        | black => { state.captures with white := captured_piece :: state.captures.white }
+    updateHalfMoves (state : GameState) (p : Piece) (toSq : Square) :=
+      match p.type with
+      | pawn => 0
+      | _ => match state.board toSq with
+        | some _ => 0
+        | none => state.halfMoves + 1
