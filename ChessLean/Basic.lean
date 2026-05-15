@@ -54,11 +54,11 @@ structure GameState where
   turn        : Color
   castling    : CastlingRights
   enPassant   : Option Square
-  numMove     : Nat
+  numMove     : Nat := 0
   halfMoves   : Nat
-  valid       : Bool
-  messages    : List String
-  history     : List Move
+  valid       : Bool := true
+  messages    : List String := []
+  history     : List Move := []
 
 /-- Return the square with an offset of `(df, dr)` from square `sq` (`df` is along file, `dr` is along rank) -/
 def Square.offsetSquare (sq : Square) (df dr : Int) : Option Square :=
@@ -209,3 +209,43 @@ def GameState.kingMoves (state : GameState) (sq : Square) : List Move :=
       isStartingSq ∧ isEmptyFileOffset (-1) ∧ isEmptyFileOffset (-2) ∧ isEmptyFileOffset (-3) ∧
       ((state.turn == .white ∧ state.castling.whiteQueenside) ∨
        (state.turn == .black ∧ state.castling.blackQueenside))
+
+/-- Return all valid moves for piece `p` at square `sq` in game -/
+def GameState.generateMovesFor (state : GameState) (sq : Square) (p : Piece) : List Move :=
+  if p.color != state.turn then
+    [] -- You can only generate moves for your own pieces
+  else match p.type with
+    | .pawn   => state.pawnMoves sq
+    | .knight => state.knightMoves sq
+    | .bishop => state.bishopMoves sq
+    | .rook   => state.rookMoves sq
+    | .queen  => state.queenMoves sq
+    | .king   => state.kingMoves sq
+
+/-- List of all squares on chessboard -/
+def allSquares : List Square :=
+  (List.finRange 8).flatMap fun f =>
+    (List.finRange 8).map fun r =>
+      { file := f, rank := r }
+
+/-- Generate all pseudo-legal moves in game -/
+def GameState.generateAllPseudoLegalMoves (state : GameState) : List Move :=
+  allSquares.flatMap fun sq =>
+    match state.board sq with
+    | some p => state.generateMovesFor sq p
+    | none   => []
+
+/-- Update castling rights based on piece `p` moving from `fromSq` to `toSq` -/
+def CastlingRights.updateCastlingRights (c : CastlingRights) (fromSq toSq : Square) (p : Piece)
+    : CastlingRights :=
+  match p.type, p.color with
+  | .king, .white => { c with whiteKingside := false, whiteQueenside := false}
+  | .king, .black => { c with blackKingside := false, blackQueenside := false }
+  | _, _ => checkRook toSq <| checkRook fromSq c
+  where
+  checkRook (sq : Square) (rights : CastlingRights) : CastlingRights :=
+    if      sq.rank.val == 0 ∧ sq.file.val == 7 then { rights with whiteKingside := false }
+    else if sq.rank.val == 0 ∧ sq.file.val == 0 then { rights with whiteQueenside := false }
+    else if sq.rank.val == 7 ∧ sq.file.val == 7 then { rights with blackKingside := false }
+    else if sq.rank.val == 7 ∧ sq.file.val == 0 then { rights with blackQueenside := false }
+    else rights
