@@ -172,3 +172,40 @@ def GameState.pawnMoves (state : GameState) (sq : Square) : List Move :=
       normalCap ++ epCap
   -- Combine all valid pawn moves
   singlePushMoves ++ doublePushMoves ++ captureMoves
+
+/-- Helper to check if an offset from a square is empty -/
+def Board.isEmptyOffset (board : Board) (sq : Square) (df dr : Int) : Bool :=
+  match sq.offsetSquare df dr with
+  | some checkSq =>
+    match board checkSq with
+    | none   => true
+    | some _ => false
+  | none => false
+
+/-- Return all valid king moves (does not check for checks) -/
+def GameState.kingMoves (state : GameState) (sq : Square) : List Move :=
+  let normalMoves := state.generateStepMoves sq [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+  let kingsideMoves := if kingsideCondition then
+      match sq.offsetSquare 2 0 with
+      | some toSq => [Move.mk sq toSq none]
+      | none => []
+    else []
+  let queensideMoves := if queensideCondition then
+      match sq.offsetSquare (-2) 0 with
+      | some toSq => [Move.mk sq toSq none]
+      | none => []
+    else []
+  normalMoves ++ kingsideMoves ++ queensideMoves
+  where
+    isEmptyFileOffset (df : Int) := state.board.isEmptyOffset sq df 0
+    isStartingSq : Bool :=
+      (state.turn == .white ∧ sq.rank == 0 ∧ sq.file == 4) ∨
+      (state.turn == .black ∧ sq.rank == 7 ∧ sq.file == 4)
+    kingsideCondition : Bool :=
+      isStartingSq ∧ isEmptyFileOffset 1 ∧ isEmptyFileOffset 2 ∧
+      ((state.turn == .white ∧ state.castling.whiteKingside) ∨
+       (state.turn == .black ∧ state.castling.blackKingside))
+    queensideCondition : Bool :=
+      isStartingSq ∧ isEmptyFileOffset (-1) ∧ isEmptyFileOffset (-2) ∧ isEmptyFileOffset (-3) ∧
+      ((state.turn == .white ∧ state.castling.whiteQueenside) ∨
+       (state.turn == .black ∧ state.castling.blackQueenside))
