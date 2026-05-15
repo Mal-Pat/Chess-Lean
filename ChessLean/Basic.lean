@@ -5,7 +5,7 @@ Authors: Malhar A. Patel
 inductive Color where
   | white
   | black
-  deriving Repr, DecidableEq, Inhabited
+  deriving Repr, Inhabited, DecidableEq
 
 def Color.opposite : Color → Color
   | white => black
@@ -13,12 +13,12 @@ def Color.opposite : Color → Color
 
 inductive PieceType where
   | pawn | knight | bishop | rook | queen | king
-  deriving Repr, DecidableEq
+  deriving Repr, Inhabited, DecidableEq
 
 structure Piece where
   color : Color
   type  : PieceType
-  deriving Repr, DecidableEq
+  deriving Repr, Inhabited, DecidableEq
 
 abbrev File := Fin 8
 abbrev Rank := Fin 8
@@ -26,7 +26,7 @@ abbrev Rank := Fin 8
 structure Square where
   file : File
   rank : Rank
-  deriving Repr, DecidableEq
+  deriving Repr, Inhabited, DecidableEq
 
 /-- Board is defined as a function from `Square` to `Option Piece` -/
 def Board := Square → Option Piece
@@ -38,46 +38,154 @@ def Board.empty : Board := fun _ => none
 def Board.update (b : Board) (sq : Square) (p : Option Piece) : Board :=
   fun s => if s == sq then p else b s
 
+def Board.start : Board := fun ⟨file, rank⟩ =>
+  match rank.val with
+  | 1 => some ⟨.white, .pawn⟩
+  | 6 => some ⟨.black, .pawn⟩
+  | 0 => backRank .white file.val
+  | 7 => backRank .black file.val
+  | _ => none
+where
+  backRank (c : Color) (f : Nat) : Option Piece :=
+    match f with
+    | 0 | 7 => some ⟨c, .rook⟩
+    | 1 | 6 => some ⟨c, .knight⟩
+    | 2 | 5 => some ⟨c, .bishop⟩
+    | 3     => some ⟨c, .queen⟩
+    | 4     => some ⟨c, .king⟩
+    | _     => none
+
+def Piece.toUnicode : Piece → String
+  | ⟨.white, .pawn⟩   => "♟"
+  | ⟨.white, .knight⟩ => "♞"
+  | ⟨.white, .bishop⟩ => "♝"
+  | ⟨.white, .rook⟩   => "♜"
+  | ⟨.white, .queen⟩  => "♛"
+  | ⟨.white, .king⟩   => "♚"
+  | ⟨.black, .pawn⟩   => "♙"
+  | ⟨.black, .knight⟩ => "♘"
+  | ⟨.black, .bishop⟩ => "♗"
+  | ⟨.black, .rook⟩   => "♖"
+  | ⟨.black, .queen⟩  => "♕"
+  | ⟨.black, .king⟩   => "♔"
+
+instance : Repr Board where
+  reprPrec b _ :=
+    let ranks : List (Fin 8) := [7, 6, 5, 4, 3, 2, 1, 0]
+    let files : List (Fin 8) := [0, 1, 2, 3, 4, 5, 6, 7]
+
+    let boardLines := ranks.map fun r =>
+      let rowPieces := files.map fun f =>
+        match b ⟨f, r⟩ with
+        | none   => "・"
+        | some p => p.toUnicode
+      let rowStr := String.intercalate " " rowPieces
+      s!"{r.val + 1} | {rowStr} |"
+
+    let border := "  +-----------------+"
+    let footer := "    a b c d e f g h"
+    let lines  := [border] ++ boardLines ++ [border, footer]
+    Std.Format.text (String.intercalate "\n" lines)
+
+#eval Board.start
+
+instance : Inhabited Board where
+  default := .start
+
 structure NormalMove where
   fromSq : Square
   toSq   : Square
+  deriving Repr, Inhabited, DecidableEq
 
 structure PawnPromotionMove where
   fromSq    : Square
   toSq      : Square
   promotion : PieceType
+  deriving Repr, Inhabited, DecidableEq
 
 structure PawnEnPassantMove where
   fromSq      : Square
   enPassantSq : Square
+  deriving Repr, Inhabited, DecidableEq
 
 inductive Castle where
   | kingside
   | queenside
+  deriving Repr, Inhabited, DecidableEq
 
 structure CastlingRights where
   whiteKingside  : Bool := true
   whiteQueenside : Bool := true
   blackKingside  : Bool := true
   blackQueenside : Bool := true
+  deriving Repr, Inhabited, DecidableEq
 
 inductive Move where
   | normal    (m : NormalMove)
   | castle    (m : Castle)
   | promotion (m : PawnPromotionMove)
   | enPassant (m : PawnEnPassantMove)
+  deriving Repr, Inhabited, DecidableEq
+
+#check Char.toNat
+#eval Char.toNat 'a'
+
+#check Fin 8
+
+def cF (ch : Char) : File :=
+  let n := ch.toNat - 97
+  if h : n < 8 then ⟨n, h⟩
+  else 7
+
+def nR (n : Nat) : Rank :=
+  if h : n < 8 then ⟨n - 1, by grind⟩
+  else 7
+
+syntax "n'[" term "," term "," term "," term "]" : term
+macro_rules
+  | `(n'[ $c1:term , $n1:term, $c2:term , $n2:term ]) =>
+    `(Move.normal ⟨ ⟨ cF $c1 , nR $n1 ⟩, ⟨ cF $c2 , nR $n2 ⟩ ⟩)
+
+syntax "n[" term "," term "," term "," term "]" : term
+macro_rules
+  | `(n[ $c1:term , $n1:term, $c2:term , $n2:term ]) =>
+    `(Move.normal ⟨ ⟨ nR $c1 , nR $n1 ⟩, ⟨ nR $c2 , nR $n2 ⟩ ⟩)
+
+syntax "O-O" : term
+macro_rules
+  | `(O-O) => `(Move.castle Castle.kingside)
+
+syntax "O-O-O" : term
+macro_rules
+  | `(O-O-O) => `(Move.castle Castle.queenside)
+
+syntax "p[" term "," term "," term "," term "," term "]" : term
+macro_rules
+  | `(p[ $c1:term , $n1:term, $c2:term , $n2:term , $p:term]) =>
+    `(Move.promotion ⟨ ⟨ nR $c1 , nR $n1 ⟩, ⟨ nR $c2 , nR $n2 ⟩, $p ⟩)
+
+#eval O-O-O
+
+#eval n'['e', 2, 'e', 5]
+
+#eval p[2, 2, 3, 5, PieceType.queen]
+
+-- notation "n[" ch1 "," num1 "," ch2 "," num2 "]" =>
+--   Move.normal ⟨charToFile ch1, numToRank num1⟩
 
 inductive Result where
   | ongoing
   | win (col : Color)
   | draw
+  deriving Repr, Inhabited, DecidableEq
 
 structure Captures where
   white : List Piece
   black : List Piece
+  deriving Repr, Inhabited, DecidableEq
 
 structure GameState where
-  board       : Board
+  board       : Board := .start
   turn        : Color := .white
   castling    : CastlingRights := {}
   enPassantSq : Option Square := none
@@ -88,6 +196,24 @@ structure GameState where
   valid       : Bool := true
   messages    : List String := []
   history     : List Move := []
+
+instance : Inhabited GameState where
+  default := {
+    board := default
+    turn := .white
+    castling := {}
+    enPassantSq := none
+    captures := ⟨ [], [] ⟩
+    halfMoves := 0
+    numMove := 0
+    result := .ongoing
+    valid := true
+    messages := []
+    history := []
+  }
+
+instance : Repr GameState where
+  reprPrec state n := reprPrec state.board n
 
 open GameState Color NormalMove Move PieceType Castle
 
@@ -358,3 +484,66 @@ def GameState.applyPseudoLegalMove (state : GameState) (move : Move)
       | _ => match state.board toSq with
         | some _ => 0
         | none => state.halfMoves + 1
+
+def findKing (b : Board) (c : Color) : Option Square :=
+  allSquares.find? fun sq =>
+    match b sq with
+    | some p => p.color == c ∧ p.type == .king
+    | none => false
+
+/-- Returns a list of all attacked squares by all valid moves -/
+def attackedSquares (state : GameState) : List Square :=
+  let moves := generateAllPseudoLegalMoves state
+  moves.foldl (
+    fun lsq mv => match mv with
+    | normal m => match state.board m.toSq with
+      | some _ => m.toSq :: lsq
+      | none   => lsq
+    | promotion m => match state.board m.toSq with
+      | some _ => m.toSq :: lsq
+      | none   => lsq
+    | enPassant m => m.enPassantSq :: lsq
+    | castle _ => lsq
+    )
+  []
+
+def IsInCheck (state : GameState) : Bool :=
+  match findKing state.board state.turn with
+  | none => False
+  | some kingSq =>
+    let flippedState := { state with turn := state.turn.opposite }
+    kingSq ∈ attackedSquares flippedState
+
+def IsPseudoLegalMove (state : GameState) (m : Move) : Bool :=
+  m ∈ generateAllPseudoLegalMoves state
+
+-- A move is strictly legal if it is pseudo-legal AND doesn't result in self-check.
+def IsLegalMove (state : GameState) (m : Move) : Bool :=
+  IsPseudoLegalMove state m ∧ ¬IsInCheck (applyPseudoLegalMove state m)
+
+-- #synth Decidable IsLegalMove
+-- set_option trace.Meta.synthInstance true
+
+def GameState.playMove (state : GameState) (move : Move) : GameState :=
+  if IsLegalMove state move then
+    let state1 := state.applyPseudoLegalMove move
+    { state1 with
+      valid := true
+      history := move :: state1.history
+      messages := [] }
+  else
+    { state with
+      valid := false
+      messages := ["Illegal Move"] }
+
+def GameState.play (state : GameState) (moves : List Move)
+    : GameState :=
+  moves.foldl (fun st mv => st.playMove mv) state
+
+def game1 : GameState :=
+  (default : GameState).play
+    [
+      n[5,2,5,3]
+    ]
+
+#eval game1
