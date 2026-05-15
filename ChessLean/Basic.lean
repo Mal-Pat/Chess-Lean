@@ -38,27 +38,47 @@ def Board.empty : Board := fun _ => none
 def Board.update (b : Board) (sq : Square) (p : Option Piece) : Board :=
   fun s => if s == sq then p else b s
 
+structure NormalMove where
+  fromSq : Square
+  toSq   : Square
+
+structure PawnPromotionMove where
+  fromSq    : Square
+  toSq      : Square
+  promotion : PieceType
+
+structure PawnEnPassantMove where
+  fromSq      : Square
+  enPassantSq : Square
+
+inductive Castle where
+  | kingside
+  | queenside
+
 structure CastlingRights where
   whiteKingside  : Bool
   whiteQueenside : Bool
   blackKingside  : Bool
   blackQueenside : Bool
 
-structure Move where
-  fromSq    : Square
-  toSq      : Square
-  promotion : Option PieceType
+inductive Move where
+  | normal    (m : NormalMove)
+  | castle    (m : Castle)
+  | promotion (m : PawnPromotionMove)
+  | enPassant (m : PawnEnPassantMove)
 
 structure GameState where
   board       : Board
   turn        : Color
   castling    : CastlingRights
-  enPassant   : Option Square
+  enPassantSq : Option Square
   numMove     : Nat := 0
   halfMoves   : Nat
   valid       : Bool := true
   messages    : List String := []
-  history     : List Move := []
+  history     : List NormalMove := []
+
+open GameState Color NormalMove Move PieceType Castle
 
 /-- Return the square with an offset of `(df, dr)` from square `sq` (`df` is along file, `dr` is along rank) -/
 def Square.offsetSquare (sq : Square) (df dr : Int) : Option Square :=
@@ -77,8 +97,8 @@ def GameState.generateStepMoves (state : GameState) (startSq : Square) (offsets 
     | none => none
     | some targetSq =>
       match state.board targetSq with
-      | some p => if p.color == state.turn then none else some (Move.mk startSq targetSq none)
-      | none   => some (Move.mk startSq targetSq none)
+      | some p => if p.color == state.turn then none else some <| normal ⟨startSq, targetSq⟩
+      | none   => some <| normal ⟨startSq, targetSq⟩
 
 /-- Return all valid slide moves in a direction -/
 def Board.slideMove (board : Board) (color : Color) (startSq currentSq : Square) (df dr : Int) (fuel : Nat)
@@ -91,10 +111,10 @@ def Board.slideMove (board : Board) (color : Color) (startSq currentSq : Square)
     | some nextSq =>
       match board nextSq with
       | none => -- empty; continue moving
-        (Move.mk startSq nextSq none) :: (slideMove board color startSq nextSq df dr n)
+        (normal ⟨startSq, nextSq⟩) :: (slideMove board color startSq nextSq df dr n)
       | some p =>
         if p.color != color then
-          [Move.mk startSq nextSq none] -- Opponent piece; capture and stop
+          [normal ⟨startSq, nextSq⟩] -- Opponent piece; capture and stop
         else
           [] -- Own piece; stop before it
 
@@ -123,104 +143,94 @@ def GameState.queenMoves (state : GameState) (sq : Square) : List Move :=
   let directions := [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
   state.generateSlideMoves sq directions
 
-/-- Return pawn move from `fromSq` to `toSq`, along with promotion if possible -/
-def GameState.makePawnMovesAndPromotion (state : GameState) (fromSq toSq : Square) : List Move :=
-  let isProm := match state.turn with
-    | .white => toSq.rank == 7
-    | .black => toSq.rank == 0
-  if isProm then
-    [ Move.mk fromSq toSq (some PieceType.queen),
-      Move.mk fromSq toSq (some PieceType.rook),
-      Move.mk fromSq toSq (some PieceType.bishop),
-      Move.mk fromSq toSq (some PieceType.knight) ]
-  else
-    [ Move.mk fromSq toSq none ]
-
 /-- Return all valid pawn moves for pawn at square `sq` -/
 def GameState.pawnMoves (state : GameState) (sq : Square) : List Move :=
-  let dir := match state.turn with | .white => 1 | .black => -1
-  let startRank := match state.turn with | .white => 1 | .black => 6
-  let singlePushMoves :=
-    match sq.offsetSquare 0 dir with
-    | none => [] -- not possible
-    | some targetSq =>
-      match state.board targetSq with
-      | none => state.makePawnMovesAndPromotion sq targetSq
-      | some _ => []
-  let doublePushMoves :=
-    if sq.rank == startRank then
-      match sq.offsetSquare 0 dir, sq.offsetSquare 0 (2 * dir) with
-      | some step1, some step2 =>
-        match state.board step1, state.board step2 with
-        | none, none => [Move.mk sq step2 none]
-        | _, _ => []
-      | _, _ => [] -- not possible
-    else []
-  let captureOffsets := [(-1, dir), (1, dir)]
-  let captureMoves := captureOffsets.flatMap fun (df, dr) =>
-    match sq.offsetSquare df dr with
-    | none => []
-    | some targetSq =>
-      -- Normal Capture
-      let normalCap := match state.board targetSq with
-        | some p => if p.color != state.turn then state.makePawnMovesAndPromotion sq targetSq else []
-        | none => []
-      -- En Passant Capture
-      let epCap := match state.enPassant with
-        | some epSq => if targetSq == epSq then [Move.mk sq targetSq none] else []
-        | none => []
-      normalCap ++ epCap
-  -- Combine all valid pawn moves
-  singlePushMoves ++ doublePushMoves ++ captureMoves
+  singlePushMoves ++ doublePushMoves ++ captureMoves    
+  where
+    dir := match state.turn with | .white => 1 | .black => -1
+    singlePushMoves :=
+      match sq.offsetSquare 0 dir with
+      | none => [] -- not possible
+      | some targetSq =>
+        match state.board targetSq with
+        | none => makePawnMovesAndPromotion sq targetSq
+        | some _ => []
+    startRank := match state.turn with | .white => 1 | .black => 6
+    doublePushMoves :=
+      if sq.rank == startRank then
+        match sq.offsetSquare 0 dir, sq.offsetSquare 0 (2 * dir) with
+        | some step1, some step2 =>
+          match state.board step1, state.board step2 with
+          | none, none => [normal ⟨sq, step2⟩]
+          | _, _ => []
+        | _, _ => [] -- not possible
+      else []
+    captureOffsets := [(-1, dir), (1, dir)]
+    captureMoves := captureOffsets.flatMap fun (df, dr) =>
+      match sq.offsetSquare df dr with
+      | none => []
+      | some targetSq =>
+        -- Normal Capture
+        let normalCap := match state.board targetSq with
+          | some p => if p.color != state.turn then makePawnMovesAndPromotion sq targetSq else []
+          | none => []
+        -- En Passant Capture
+        let epCap := match state.enPassantSq with
+          | some epSq => if targetSq == epSq then [enPassant ⟨sq, targetSq⟩] else []
+          | none => []
+        normalCap ++ epCap
+    makePawnMovesAndPromotion (fromSq toSq : Square) :=
+      let isProm := match state.turn with
+        | .white => toSq.rank == 7
+        | .black => toSq.rank == 0
+      if isProm then
+        [ promotion ⟨fromSq, toSq, queen⟩,
+          promotion ⟨fromSq, toSq, rook⟩,
+          promotion ⟨fromSq, toSq, bishop⟩,
+          promotion ⟨fromSq, toSq, knight⟩ ]
+      else
+        [ normal ⟨fromSq, toSq⟩ ]
 
-/-- Helper to check if an offset from a square is empty -/
-def Board.isEmptyOffset (board : Board) (sq : Square) (df dr : Int) : Bool :=
-  match sq.offsetSquare df dr with
-  | some checkSq =>
-    match board checkSq with
-    | none   => true
-    | some _ => false
-  | none => false
+def GameState.offsetPiece (state : GameState) (sq : Square) (df dr : Int)
+    : Option Piece := do
+  state.board <| ← sq.offsetSquare df dr
+
+def GameState.hasCastlingRights (state : GameState) (col : Color) (side : Castle)
+    : Bool :=
+  match col, side with
+  | white, kingside  => state.castling.whiteKingside
+  | black, queenside => state.castling.blackQueenside
+  | black, kingside  => state.castling.blackKingside
+  | white, queenside => state.castling.whiteQueenside
 
 /-- Return all valid king moves (does not check for checks) -/
 def GameState.kingMoves (state : GameState) (sq : Square) : List Move :=
-  let normalMoves := state.generateStepMoves sq [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
-  let kingsideMoves := if kingsideCondition then
-      match sq.offsetSquare 2 0 with
-      | some toSq => [Move.mk sq toSq none]
-      | none => []
-    else []
-  let queensideMoves := if queensideCondition then
-      match sq.offsetSquare (-2) 0 with
-      | some toSq => [Move.mk sq toSq none]
-      | none => []
-    else []
   normalMoves ++ kingsideMoves ++ queensideMoves
   where
-    isEmptyFileOffset (df : Int) := state.board.isEmptyOffset sq df 0
-    isStartingSq : Bool :=
-      (state.turn == .white ∧ sq.rank == 0 ∧ sq.file == 4) ∨
-      (state.turn == .black ∧ sq.rank == 7 ∧ sq.file == 4)
-    kingsideCondition : Bool :=
-      isStartingSq ∧ isEmptyFileOffset 1 ∧ isEmptyFileOffset 2 ∧
-      ((state.turn == .white ∧ state.castling.whiteKingside) ∨
-       (state.turn == .black ∧ state.castling.blackKingside))
-    queensideCondition : Bool :=
-      isStartingSq ∧ isEmptyFileOffset (-1) ∧ isEmptyFileOffset (-2) ∧ isEmptyFileOffset (-3) ∧
-      ((state.turn == .white ∧ state.castling.whiteQueenside) ∨
-       (state.turn == .black ∧ state.castling.blackQueenside))
+    normalMoves := state.generateStepMoves sq
+      [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]
+    kingsideMoves := if state.hasCastlingRights state.turn kingside then
+        match state.offsetPiece sq 1 0, state.offsetPiece sq 2 0 with
+        | none, none => [castle kingside]
+        | _, _ => []
+      else []
+    queensideMoves := if state.hasCastlingRights state.turn queenside then
+        match state.offsetPiece sq (-1) 0, state.offsetPiece sq (-2) 0 with
+        | none, none => [castle queenside]
+        | _, _ => []
+      else []
 
 /-- Return all valid moves for piece `p` at square `sq` in game -/
-def GameState.generateMovesFor (state : GameState) (sq : Square) (p : Piece) : List Move :=
-  if p.color != state.turn then
-    [] -- You can only generate moves for your own pieces
+def GameState.generateMovesFor (state : GameState) (sq : Square) (p : Piece)
+    : List Move :=
+  if p.color != state.turn then []
   else match p.type with
-    | .pawn   => state.pawnMoves sq
-    | .knight => state.knightMoves sq
-    | .bishop => state.bishopMoves sq
-    | .rook   => state.rookMoves sq
-    | .queen  => state.queenMoves sq
-    | .king   => state.kingMoves sq
+    | pawn   => state.pawnMoves sq
+    | knight => state.knightMoves sq
+    | bishop => state.bishopMoves sq
+    | rook   => state.rookMoves sq
+    | queen  => state.queenMoves sq
+    | king   => state.kingMoves sq
 
 /-- List of all squares on chessboard -/
 def allSquares : List Square :=
@@ -236,16 +246,16 @@ def GameState.generateAllPseudoLegalMoves (state : GameState) : List Move :=
     | none   => []
 
 /-- Update castling rights based on piece `p` moving from `fromSq` to `toSq` -/
-def CastlingRights.updateCastlingRights (c : CastlingRights) (fromSq toSq : Square) (p : Piece)
+def CastlingRights.updateCastlingRights (rights : CastlingRights) (fromSq toSq : Square) (p : Piece)
     : CastlingRights :=
   match p.type, p.color with
-  | .king, .white => { c with whiteKingside := false, whiteQueenside := false}
-  | .king, .black => { c with blackKingside := false, blackQueenside := false }
-  | _, _ => checkRook toSq <| checkRook fromSq c
+  | .king, .white => { rights with whiteKingside := false, whiteQueenside := false}
+  | .king, .black => { rights with blackKingside := false, blackQueenside := false }
+  | _, _ => checkRook toSq <| checkRook fromSq rights
   where
-  checkRook (sq : Square) (rights : CastlingRights) : CastlingRights :=
-    if      sq.rank.val == 0 ∧ sq.file.val == 7 then { rights with whiteKingside := false }
-    else if sq.rank.val == 0 ∧ sq.file.val == 0 then { rights with whiteQueenside := false }
-    else if sq.rank.val == 7 ∧ sq.file.val == 7 then { rights with blackKingside := false }
-    else if sq.rank.val == 7 ∧ sq.file.val == 0 then { rights with blackQueenside := false }
-    else rights
+  checkRook (sq : Square) (cr : CastlingRights) : CastlingRights :=
+    if      sq.rank == 0 ∧ sq.file == 7 then { cr with whiteKingside := false }
+    else if sq.rank == 0 ∧ sq.file == 0 then { cr with whiteQueenside := false }
+    else if sq.rank == 7 ∧ sq.file == 7 then { cr with blackKingside := false }
+    else if sq.rank == 7 ∧ sq.file == 0 then { cr with blackQueenside := false }
+    else    cr
